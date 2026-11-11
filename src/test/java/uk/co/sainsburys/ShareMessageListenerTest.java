@@ -1,8 +1,12 @@
 package uk.co.sainsburys;
 
-import org.apache.kafka.clients.producer.KafkaProducer;
+import org.apache.kafka.clients.consumer.Consumer;
+import org.apache.kafka.clients.consumer.ConsumerRecord;
+import org.apache.kafka.clients.consumer.ConsumerRecords;
 import org.apache.kafka.clients.producer.Producer;
 import org.apache.kafka.clients.producer.ProducerRecord;
+import org.apache.kafka.clients.producer.RecordMetadata;
+import org.apache.kafka.common.header.internals.RecordHeader;
 import org.junit.jupiter.api.AfterEach;
 import org.junit.jupiter.api.BeforeAll;
 import org.junit.jupiter.api.BeforeEach;
@@ -15,7 +19,8 @@ import org.testcontainers.junit.jupiter.Container;
 import org.testcontainers.junit.jupiter.Testcontainers;
 import org.testcontainers.kafka.ConfluentKafkaContainer;
 
-import java.util.Map;
+import java.io.IOException;
+import java.time.Duration;
 
 import static java.util.concurrent.TimeUnit.MILLISECONDS;
 import static java.util.concurrent.TimeUnit.SECONDS;
@@ -24,6 +29,10 @@ import static org.awaitility.Awaitility.await;
 import static org.mockito.Mockito.doThrow;
 import static org.mockito.Mockito.times;
 import static org.mockito.Mockito.verify;
+import static uk.co.sainsburys.TestUtils.configureShareGroupDLQ;
+import static uk.co.sainsburys.TestUtils.createDlqConsumer;
+import static uk.co.sainsburys.TestUtils.createKafkaTopic;
+import static uk.co.sainsburys.TestUtils.createProducer;
 import static uk.co.sainsburys.TestUtils.waitForShareGroupAssignment;
 
 @Testcontainers
@@ -32,14 +41,16 @@ class ShareMessageListenerTest {
 
     private static final String TOPIC = "my-topic";
     private static final String SHARE_GROUP_ID = "my-share-group";
+    private static final String DLQ_TOPIC = "dlq.%s.%s".formatted(SHARE_GROUP_ID, TOPIC);
 
     @MockitoBean
     private MessageProcessor messageProcessor;
 
     private Producer<String, String> producer;
+    private Consumer<String, String> dlqConsumer;
 
     @Container
-    private static final ConfluentKafkaContainer KAFKA = new ConfluentKafkaContainer("confluentinc/cp-kafka:8.2.1")
+    private static final ConfluentKafkaContainer KAFKA = new ConfluentKafkaContainer("confluentinc/cp-kafka:8.4.0")
             .withEnv("KAFKA_SHARE_COORDINATOR_STATE_TOPIC_REPLICATION_FACTOR", "1")
             .withEnv("KAFKA_SHARE_COORDINATOR_STATE_TOPIC_MIN_ISR", "1");
 
@@ -52,31 +63,27 @@ class ShareMessageListenerTest {
 
     @BeforeAll
     static void beforeAll() throws Exception {
-        var result = KAFKA.execInContainer("kafka-features", "--bootstrap-server", "localhost:9093", "upgrade", "--feature", "share.version=1");
-        System.out.printf("Enabling Share Groups %d - %s - %s%n", result.getExitCode(), result.getStdout(), result.getStderr());
-
-        assertThat(result.getExitCode())
-                .as("Failed to enable share groups")
-                .isZero();
-
         // create topic with 4 partitions
-        var topicResult = KAFKA.execInContainer("kafka-topics", "--bootstrap-server", "localhost:9093", "--create", "--topic", "my-topic", "--replication-factor", "1", "--partitions", "4");
-        System.out.printf("Topic creation %d - %s - %s%n", topicResult.getExitCode(), topicResult.getStdout(), topicResult.getStderr());
+        createKafkaTopic(KAFKA, TOPIC, 4);
 
-        assertThat(topicResult.getExitCode())
-                .as("Failed to create topic")
-                .isZero();
+        // create DLQ topic with 1 partition
+        createKafkaTopic(KAFKA, DLQ_TOPIC, 1);
+
+        // enable DLQ on DLQ topic
+        configureShareGroupDLQ(KAFKA, DLQ_TOPIC, SHARE_GROUP_ID);
     }
 
     @BeforeEach
     void setUp() {
-        producer = createProducer();
+        producer = createProducer(KAFKA.getBootstrapServers());
+        dlqConsumer = createDlqConsumer(KAFKA.getBootstrapServers(), DLQ_TOPIC);
         waitForShareGroupAssignment(KAFKA.getBootstrapServers(), TOPIC, SHARE_GROUP_ID, 2);
     }
 
     @AfterEach
     void tearDown() {
         producer.close();
+        dlqConsumer.close();
     }
 
     @Test
@@ -110,27 +117,62 @@ class ShareMessageListenerTest {
     }
 
     @Test
-    void produceMessage_messageProcessorThrowsRetryableExceptionAlways_shouldBeRetriedAndArchived() throws Exception {
+    void produceMessage_messageProcessorThrowsRetryableExceptionAlways_shouldBeRetriedAndSentToDLQ() throws Exception {
         String message = "Goodbye cruel world!";
         doThrow(new RetryableException("Temporary failure"))
                 .when(messageProcessor).processMessage(message);
 
-        producer.send(new ProducerRecord<>(TOPIC, "key", message));
+        RecordMetadata recordMetadata = producer.send(new ProducerRecord<>(TOPIC, "key1", message))
+                .get(1, SECONDS);
 
         await().atMost(5, SECONDS)
                 .pollDelay(100, MILLISECONDS)
                 .untilAsserted(() ->
                         verify(messageProcessor, times(5)).processMessage(message));
+
+        ConsumerRecords<String, String> consumerRecords = dlqConsumer.poll(Duration.ofSeconds(2));
+        assertThat(consumerRecords.count()).isEqualTo(1);
+
+        ConsumerRecord<String, String> consumerRecord = consumerRecords.iterator().next();
+        assertThat(consumerRecord.key()).isEqualTo("key1");
+        assertThat(consumerRecord.value()).isEqualTo(message);
+        assertThat(consumerRecord.headers()).contains(
+                new RecordHeader("__dlq.errors.topic", recordMetadata.topic().getBytes()),
+                new RecordHeader("__dlq.errors.partition", Integer.toString(recordMetadata.partition()).getBytes()),
+                new RecordHeader("__dlq.errors.offset", Long.toString(recordMetadata.offset()).getBytes()),
+                new RecordHeader("__dlq.errors.group", SHARE_GROUP_ID.getBytes()),
+                new RecordHeader("__dlq.errors.delivery.count", "5".getBytes()),
+                new RecordHeader("__dlq.errors.message", "Offset delivery count exceeded the threshold.".getBytes())
+        );
     }
 
-    private static Producer<String, String> createProducer() {
-        Map<String, Object> props = Map.of(
-                "bootstrap.servers", KAFKA.getBootstrapServers(),
-                "key.serializer", "org.apache.kafka.common.serialization.StringSerializer",
-                "value.serializer", "org.apache.kafka.common.serialization.StringSerializer",
-                "acks", "all"
-        );
+    @Test
+    void produceMessage_messageProcessorThrowsNonRetryableExceptionAlways_shouldBeArchivedAndSentToDLQ() throws Exception {
+        String message = "Never recover";
+        doThrow(new IOException("Permanent failure"))
+                .when(messageProcessor).processMessage(message);
 
-        return new KafkaProducer<>(props);
+        RecordMetadata recordMetadata = producer.send(new ProducerRecord<>(TOPIC, "key2", message))
+                .get(1, SECONDS);
+
+        await().atMost(5, SECONDS)
+                .pollDelay(100, MILLISECONDS)
+                .untilAsserted(() ->
+                        verify(messageProcessor, times(1)).processMessage(message));
+
+        ConsumerRecords<String, String> consumerRecords = dlqConsumer.poll(Duration.ofSeconds(2));
+        assertThat(consumerRecords.count()).isEqualTo(1);
+
+        ConsumerRecord<String, String> consumerRecord = consumerRecords.iterator().next();
+        assertThat(consumerRecord.key()).isEqualTo("key2");
+        assertThat(consumerRecord.value()).isEqualTo(message);
+        assertThat(consumerRecord.headers()).contains(
+                new RecordHeader("__dlq.errors.topic", recordMetadata.topic().getBytes()),
+                new RecordHeader("__dlq.errors.partition", Integer.toString(recordMetadata.partition()).getBytes()),
+                new RecordHeader("__dlq.errors.offset", Long.toString(recordMetadata.offset()).getBytes()),
+                new RecordHeader("__dlq.errors.group", SHARE_GROUP_ID.getBytes()),
+                new RecordHeader("__dlq.errors.delivery.count", "1".getBytes()),
+                new RecordHeader("__dlq.errors.message", "Offset rejected by client.".getBytes())
+        );
     }
 }

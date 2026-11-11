@@ -7,13 +7,25 @@ import org.apache.kafka.clients.admin.ShareGroupDescription;
 import org.apache.kafka.clients.admin.ShareMemberAssignment;
 import org.apache.kafka.clients.admin.ShareMemberDescription;
 import org.apache.kafka.clients.admin.TopicDescription;
+import org.apache.kafka.clients.consumer.Consumer;
 import org.apache.kafka.clients.consumer.ConsumerConfig;
+import org.apache.kafka.clients.consumer.GroupProtocol;
+import org.apache.kafka.clients.consumer.KafkaConsumer;
+import org.apache.kafka.clients.producer.KafkaProducer;
+import org.apache.kafka.clients.producer.Producer;
+import org.apache.kafka.clients.producer.ProducerConfig;
 import org.apache.kafka.common.GroupState;
 import org.apache.kafka.common.TopicPartition;
+import org.apache.kafka.common.serialization.StringDeserializer;
+import org.apache.kafka.common.serialization.StringSerializer;
+import org.testcontainers.kafka.ConfluentKafkaContainer;
 
+import java.io.IOException;
+import java.time.Duration;
 import java.util.Collection;
 import java.util.List;
 import java.util.Map;
+import java.util.UUID;
 
 import static java.util.concurrent.TimeUnit.SECONDS;
 import static org.assertj.core.api.Assertions.assertThat;
@@ -89,4 +101,60 @@ public final class TestUtils {
         }
     }
 
+    public static Producer<String, String> createProducer(String bootstrapServers) {
+        Map<String, Object> props = Map.of(
+                ProducerConfig.BOOTSTRAP_SERVERS_CONFIG, bootstrapServers,
+                ProducerConfig.KEY_SERIALIZER_CLASS_CONFIG, StringSerializer.class,
+                ProducerConfig.VALUE_SERIALIZER_CLASS_CONFIG, StringSerializer.class,
+                ProducerConfig.ACKS_CONFIG, "all"
+        );
+
+        return new KafkaProducer<>(props);
+    }
+
+    public static Consumer<String, String> createDlqConsumer(String bootstrapServers, String dlqTopic) {
+        Map<String, Object> props = Map.of(
+                ConsumerConfig.BOOTSTRAP_SERVERS_CONFIG, bootstrapServers,
+                ConsumerConfig.KEY_DESERIALIZER_CLASS_CONFIG, StringDeserializer.class,
+                ConsumerConfig.VALUE_DESERIALIZER_CLASS_CONFIG, StringDeserializer.class,
+                ConsumerConfig.CLIENT_ID_CONFIG, "dlq-consumer",
+                ConsumerConfig.GROUP_ID_CONFIG, "dlq-consumer-%s".formatted(UUID.randomUUID()),
+                ConsumerConfig.AUTO_OFFSET_RESET_CONFIG, "latest",
+                ConsumerConfig.GROUP_PROTOCOL_CONFIG, GroupProtocol.CONSUMER.name().toLowerCase()
+        );
+
+        KafkaConsumer<String, String> kafkaConsumer = new KafkaConsumer<>(props);
+        kafkaConsumer.subscribe(List.of(dlqTopic));
+        kafkaConsumer.poll(Duration.ofMillis(500));
+        return kafkaConsumer;
+    }
+
+    public static void createKafkaTopic(ConfluentKafkaContainer kafkaContainer, String topic, int partitions) throws IOException, InterruptedException {
+        runCommand(kafkaContainer, "Topic creation (%s)".formatted(topic),
+                "kafka-topics", "--bootstrap-server", "localhost:9093", "--create", "--topic", topic, "--replication-factor", "1", "--partitions", String.valueOf(partitions));
+    }
+
+    public static void configureShareGroupDLQ(ConfluentKafkaContainer kafkaContainer, String dlqTopic, String shareGroupId) throws IOException, InterruptedException {
+        // enable DLQ on DLQ topic
+        runCommand(kafkaContainer, "DLQ Topic (%s) enable config".formatted(dlqTopic),
+                "kafka-configs", "--bootstrap-server", "localhost:9093", "--entity-type", "topics", "--entity-name", dlqTopic, "--alter", "--add-config", "errors.deadletterqueue.group.enable=true");
+
+        // config share group with DLQ topic
+        runCommand(kafkaContainer, "Configure share group (%s) DLQ topic (%s)".formatted(shareGroupId, dlqTopic),
+                "kafka-configs", "--bootstrap-server", "localhost:9093", "--entity-type", "groups", "--entity-name", shareGroupId, "--alter", "--add-config", "errors.deadletterqueue.topic.name=%s".formatted(dlqTopic));
+
+        // enable DLQ full record copy
+        runCommand(kafkaContainer, "Enable full record copy for share group (%s)".formatted(shareGroupId),
+                "kafka-configs", "--bootstrap-server", "localhost:9093", "--entity-type", "groups", "--entity-name", shareGroupId, "--alter", "--add-config", "errors.deadletterqueue.copy.record.enable=true");
+    }
+
+    private static void runCommand(ConfluentKafkaContainer kafkaContainer, String commandMessage, String... command) throws IOException, InterruptedException {
+        var result = kafkaContainer.execInContainer(command);
+
+        System.out.printf("%s %d - %s - %s%n", commandMessage, result.getExitCode(), result.getStdout(), result.getStderr());
+
+        assertThat(result.getExitCode())
+                .as("%s failed: %s".formatted(commandMessage, result.getStdout()))
+                .isZero();
+    }
 }
