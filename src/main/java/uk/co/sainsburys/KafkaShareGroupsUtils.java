@@ -22,9 +22,8 @@ public final class KafkaShareGroupsUtils {
 
         try (Admin adminClient = Admin.create(Map.of(ConsumerConfig.BOOTSTRAP_SERVERS_CONFIG, bootstrapServers))) {
             return adminClient.incrementalAlterConfigs(Map.of(
-                            new ConfigResource(ConfigResource.Type.TOPIC, dlqTopic), List.of(
-                                    new AlterConfigOp(new ConfigEntry("errors.deadletterqueue.group.enable", "true"), AlterConfigOp.OpType.SET)),
                             new ConfigResource(ConfigResource.Type.GROUP, shareGroupId), List.of(
+                                    // these properties only exist as constants in org.apache.kafka:kafka-group-coordinator, not org.apache.kafka:kafka-clients
                                     new AlterConfigOp(new ConfigEntry("errors.deadletterqueue.topic.name", dlqTopic), AlterConfigOp.OpType.SET),
                                     new AlterConfigOp(new ConfigEntry("errors.deadletterqueue.copy.record.enable", "true"), AlterConfigOp.OpType.SET)
                             )

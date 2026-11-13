@@ -3,8 +3,6 @@ package uk.co.sainsburys;
 import lombok.AccessLevel;
 import lombok.NoArgsConstructor;
 import org.apache.kafka.clients.admin.Admin;
-import org.apache.kafka.clients.admin.AlterConfigOp;
-import org.apache.kafka.clients.admin.ConfigEntry;
 import org.apache.kafka.clients.admin.ListShareGroupOffsetsSpec;
 import org.apache.kafka.clients.admin.NewTopic;
 import org.apache.kafka.clients.admin.ShareGroupDescription;
@@ -20,7 +18,7 @@ import org.apache.kafka.clients.producer.Producer;
 import org.apache.kafka.clients.producer.ProducerConfig;
 import org.apache.kafka.common.GroupState;
 import org.apache.kafka.common.TopicPartition;
-import org.apache.kafka.common.config.ConfigResource;
+import org.apache.kafka.common.config.TopicConfig;
 import org.apache.kafka.common.serialization.StringDeserializer;
 import org.apache.kafka.common.serialization.StringSerializer;
 
@@ -147,9 +145,21 @@ public final class TestUtils {
         return kafkaConsumer;
     }
 
-    public static void createKafkaTopic(String bootstrapServers, String topic, int partitions) throws InterruptedException, ExecutionException, TimeoutException {
+    public static void createTopic(String bootstrapServers, String topic, int partitions) throws InterruptedException, ExecutionException, TimeoutException {
+        NewTopic newTopic = new NewTopic(topic, partitions, (short) 1);
+        createTopic(bootstrapServers, newTopic);
+    }
+
+    public static void createShareGroupDlqTopic(String bootstrapServers, String topic) throws InterruptedException, ExecutionException, TimeoutException {
+        NewTopic newTopic = new NewTopic(topic, 1, (short) 1)
+                .configs(Map.of(TopicConfig.ERRORS_DEADLETTERQUEUE_GROUP_ENABLE_CONFIG, "true"));
+
+        createTopic(bootstrapServers, newTopic);
+    }
+
+    private static void createTopic(String bootstrapServers, NewTopic topic) throws InterruptedException, ExecutionException, TimeoutException {
         try (Admin adminClient = Admin.create(Map.of(ConsumerConfig.BOOTSTRAP_SERVERS_CONFIG, bootstrapServers))) {
-            adminClient.createTopics(List.of(new NewTopic(topic, partitions, (short) 1)))
+            adminClient.createTopics(List.of(topic))
                     .all()
                     .get(5, SECONDS);
         }
