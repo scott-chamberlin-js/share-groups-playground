@@ -3,6 +3,10 @@ package uk.co.sainsburys;
 import lombok.AccessLevel;
 import lombok.NoArgsConstructor;
 import org.apache.kafka.clients.admin.Admin;
+import org.apache.kafka.clients.admin.AlterConfigOp;
+import org.apache.kafka.clients.admin.ConfigEntry;
+import org.apache.kafka.clients.admin.ListShareGroupOffsetsSpec;
+import org.apache.kafka.clients.admin.NewTopic;
 import org.apache.kafka.clients.admin.ShareGroupDescription;
 import org.apache.kafka.clients.admin.ShareMemberAssignment;
 import org.apache.kafka.clients.admin.ShareMemberDescription;
@@ -16,16 +20,18 @@ import org.apache.kafka.clients.producer.Producer;
 import org.apache.kafka.clients.producer.ProducerConfig;
 import org.apache.kafka.common.GroupState;
 import org.apache.kafka.common.TopicPartition;
+import org.apache.kafka.common.config.ConfigResource;
 import org.apache.kafka.common.serialization.StringDeserializer;
 import org.apache.kafka.common.serialization.StringSerializer;
-import org.testcontainers.kafka.ConfluentKafkaContainer;
 
-import java.io.IOException;
 import java.time.Duration;
 import java.util.Collection;
 import java.util.List;
 import java.util.Map;
+import java.util.Optional;
 import java.util.UUID;
+import java.util.concurrent.ExecutionException;
+import java.util.concurrent.TimeoutException;
 
 import static java.util.concurrent.TimeUnit.SECONDS;
 import static org.assertj.core.api.Assertions.assertThat;
@@ -101,6 +107,18 @@ public final class TestUtils {
         }
     }
 
+    public static Optional<Long> getLagForShareGroup(String bootstrapServers, String topic, String shareGroupId, int partition) throws ExecutionException, InterruptedException, TimeoutException {
+        try (Admin adminClient = Admin.create(Map.of(ConsumerConfig.BOOTSTRAP_SERVERS_CONFIG, bootstrapServers))) {
+            TopicPartition topicPartition = new TopicPartition(topic, partition);
+            return adminClient.listShareGroupOffsets(Map.of(shareGroupId, new ListShareGroupOffsetsSpec().topicPartitions(List.of(topicPartition))))
+                    .all()
+                    .get(5, SECONDS)
+                    .get(shareGroupId)
+                    .get(topicPartition)
+                    .lag();
+        }
+    }
+
     public static Producer<String, String> createProducer(String bootstrapServers) {
         Map<String, Object> props = Map.of(
                 ProducerConfig.BOOTSTRAP_SERVERS_CONFIG, bootstrapServers,
@@ -129,32 +147,26 @@ public final class TestUtils {
         return kafkaConsumer;
     }
 
-    public static void createKafkaTopic(ConfluentKafkaContainer kafkaContainer, String topic, int partitions) throws IOException, InterruptedException {
-        runCommand(kafkaContainer, "Topic creation (%s)".formatted(topic),
-                "kafka-topics", "--bootstrap-server", "localhost:9093", "--create", "--topic", topic, "--replication-factor", "1", "--partitions", String.valueOf(partitions));
+    public static void createKafkaTopic(String bootstrapServers, String topic, int partitions) throws InterruptedException, ExecutionException, TimeoutException {
+        try (Admin adminClient = Admin.create(Map.of(ConsumerConfig.BOOTSTRAP_SERVERS_CONFIG, bootstrapServers))) {
+            adminClient.createTopics(List.of(new NewTopic(topic, partitions, (short) 1)))
+                    .all()
+                    .get(5, SECONDS);
+        }
     }
 
-    public static void configureShareGroupDLQ(ConfluentKafkaContainer kafkaContainer, String dlqTopic, String shareGroupId) throws IOException, InterruptedException {
-        // enable DLQ on DLQ topic
-        runCommand(kafkaContainer, "DLQ Topic (%s) enable config".formatted(dlqTopic),
-                "kafka-configs", "--bootstrap-server", "localhost:9093", "--entity-type", "topics", "--entity-name", dlqTopic, "--alter", "--add-config", "errors.deadletterqueue.group.enable=true");
-
-        // config share group with DLQ topic
-        runCommand(kafkaContainer, "Configure share group (%s) DLQ topic (%s)".formatted(shareGroupId, dlqTopic),
-                "kafka-configs", "--bootstrap-server", "localhost:9093", "--entity-type", "groups", "--entity-name", shareGroupId, "--alter", "--add-config", "errors.deadletterqueue.topic.name=%s".formatted(dlqTopic));
-
-        // enable DLQ full record copy
-        runCommand(kafkaContainer, "Enable full record copy for share group (%s)".formatted(shareGroupId),
-                "kafka-configs", "--bootstrap-server", "localhost:9093", "--entity-type", "groups", "--entity-name", shareGroupId, "--alter", "--add-config", "errors.deadletterqueue.copy.record.enable=true");
-    }
-
-    private static void runCommand(ConfluentKafkaContainer kafkaContainer, String commandMessage, String... command) throws IOException, InterruptedException {
-        var result = kafkaContainer.execInContainer(command);
-
-        System.out.printf("%s %d - %s - %s%n", commandMessage, result.getExitCode(), result.getStdout(), result.getStderr());
-
-        assertThat(result.getExitCode())
-                .as("%s failed: %s".formatted(commandMessage, result.getStdout()))
-                .isZero();
+    public static void configureShareGroupDLQ(String bootstrapServers, String dlqTopic, String shareGroupId) throws InterruptedException, ExecutionException, TimeoutException {
+        try (Admin adminClient = Admin.create(Map.of(ConsumerConfig.BOOTSTRAP_SERVERS_CONFIG, bootstrapServers))) {
+            adminClient.incrementalAlterConfigs(Map.of(
+                            new ConfigResource(ConfigResource.Type.TOPIC, dlqTopic), List.of(
+                                    new AlterConfigOp(new ConfigEntry("errors.deadletterqueue.group.enable", "true"), AlterConfigOp.OpType.SET)),
+                            new ConfigResource(ConfigResource.Type.GROUP, shareGroupId), List.of(
+                                    new AlterConfigOp(new ConfigEntry("errors.deadletterqueue.topic.name", dlqTopic), AlterConfigOp.OpType.SET),
+                                    new AlterConfigOp(new ConfigEntry("errors.deadletterqueue.copy.record.enable", "true"), AlterConfigOp.OpType.SET)
+                            )
+                    ))
+                    .all()
+                    .get(5, SECONDS);
+        }
     }
 }

@@ -32,6 +32,7 @@ import static uk.co.sainsburys.TestUtils.configureShareGroupDLQ;
 import static uk.co.sainsburys.TestUtils.createDlqConsumer;
 import static uk.co.sainsburys.TestUtils.createKafkaTopic;
 import static uk.co.sainsburys.TestUtils.createProducer;
+import static uk.co.sainsburys.TestUtils.getLagForShareGroup;
 import static uk.co.sainsburys.TestUtils.waitForShareGroupAssignment;
 
 @Testcontainers
@@ -60,14 +61,10 @@ class MyKafkaShareConsumerTest {
 
     @BeforeAll
     static void beforeAll() throws Exception {
-        // create topic with 4 partitions
-        createKafkaTopic(KAFKA, TOPIC, 4);
+        createKafkaTopic(KAFKA.getBootstrapServers(), TOPIC, 4);
+        createKafkaTopic(KAFKA.getBootstrapServers(), DLQ_TOPIC, 1);
 
-        // create DLQ topic with 1 partition
-        createKafkaTopic(KAFKA, DLQ_TOPIC, 1);
-
-        // enable DLQ on DLQ topic
-        configureShareGroupDLQ(KAFKA, DLQ_TOPIC, SHARE_GROUP_ID);
+        configureShareGroupDLQ(KAFKA.getBootstrapServers(), DLQ_TOPIC, SHARE_GROUP_ID);
     }
 
     @BeforeEach
@@ -129,8 +126,10 @@ class MyKafkaShareConsumerTest {
 
         await().atMost(5, SECONDS)
                 .pollDelay(100, MILLISECONDS)
-                .untilAsserted(() ->
-                        verify(messageProcessor, times(5)).processMessage(message));
+                .untilAsserted(() -> {
+                    verify(messageProcessor, times(5)).processMessage(message);
+                    assertThat(getLagForShareGroup(KAFKA.getBootstrapServers(), TOPIC, SHARE_GROUP_ID, recordMetadata.partition())).contains(0L);
+                });
 
         ConsumerRecords<String, String> consumerRecords = dlqConsumer.poll(Duration.ofSeconds(2));
         assertThat(consumerRecords.count()).isEqualTo(1);
@@ -159,8 +158,10 @@ class MyKafkaShareConsumerTest {
 
         await().atMost(5, SECONDS)
                 .pollDelay(100, MILLISECONDS)
-                .untilAsserted(() ->
-                        verify(messageProcessor, times(1)).processMessage(message));
+                .untilAsserted(() -> {
+                    verify(messageProcessor, times(1)).processMessage(message);
+                    assertThat(getLagForShareGroup(KAFKA.getBootstrapServers(), TOPIC, SHARE_GROUP_ID, recordMetadata.partition())).contains(0L);
+                });
 
         ConsumerRecords<String, String> consumerRecords = dlqConsumer.poll(Duration.ofSeconds(2));
         assertThat(consumerRecords.count()).isEqualTo(1);
