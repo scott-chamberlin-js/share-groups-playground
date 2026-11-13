@@ -28,7 +28,6 @@ import static org.mockito.Mockito.atLeastOnce;
 import static org.mockito.Mockito.doThrow;
 import static org.mockito.Mockito.times;
 import static org.mockito.Mockito.verify;
-import static uk.co.sainsburys.TestUtils.configureShareGroupDLQ;
 import static uk.co.sainsburys.TestUtils.createDlqConsumer;
 import static uk.co.sainsburys.TestUtils.createKafkaTopic;
 import static uk.co.sainsburys.TestUtils.createProducer;
@@ -63,12 +62,10 @@ class MyKafkaShareConsumerTest {
     static void beforeAll() throws Exception {
         createKafkaTopic(KAFKA.getBootstrapServers(), TOPIC, 4);
         createKafkaTopic(KAFKA.getBootstrapServers(), DLQ_TOPIC, 1);
-
-        configureShareGroupDLQ(KAFKA.getBootstrapServers(), DLQ_TOPIC, SHARE_GROUP_ID);
     }
 
     @BeforeEach
-    void setUp() {
+    void setUp() throws Exception {
         testObject = new MyKafkaShareConsumer(messageProcessor, KAFKA.getBootstrapServers(), SHARE_GROUP_ID, TOPIC);
         testObject.start();
 

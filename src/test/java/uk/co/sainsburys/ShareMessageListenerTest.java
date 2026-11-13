@@ -29,7 +29,6 @@ import static org.awaitility.Awaitility.await;
 import static org.mockito.Mockito.doThrow;
 import static org.mockito.Mockito.times;
 import static org.mockito.Mockito.verify;
-import static uk.co.sainsburys.TestUtils.configureShareGroupDLQ;
 import static uk.co.sainsburys.TestUtils.createDlqConsumer;
 import static uk.co.sainsburys.TestUtils.createKafkaTopic;
 import static uk.co.sainsburys.TestUtils.createProducer;
@@ -66,8 +65,6 @@ class ShareMessageListenerTest {
     static void beforeAll() throws Exception {
         createKafkaTopic(KAFKA.getBootstrapServers(), TOPIC, 4);
         createKafkaTopic(KAFKA.getBootstrapServers(), DLQ_TOPIC, 1);
-
-        configureShareGroupDLQ(KAFKA.getBootstrapServers(), DLQ_TOPIC, SHARE_GROUP_ID);
     }
 
     @BeforeEach

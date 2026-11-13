@@ -1,5 +1,6 @@
 package uk.co.sainsburys;
 
+import jakarta.annotation.PostConstruct;
 import lombok.extern.slf4j.Slf4j;
 import org.apache.kafka.clients.consumer.AcknowledgeType;
 import org.apache.kafka.clients.consumer.ConsumerConfig;
@@ -14,14 +15,32 @@ import org.springframework.kafka.core.ShareConsumerFactory;
 import org.springframework.kafka.listener.ShareConsumerRecordRecoverer;
 
 import java.util.Map;
+import java.util.concurrent.ExecutionException;
+import java.util.concurrent.TimeUnit;
+import java.util.concurrent.TimeoutException;
 
 @Slf4j
 @EnableKafka
 @Configuration
 public class KafkaConfig {
 
+    @Value("${kafka.bootstrap-servers}")
+    private String bootstrapServers;
+
+    @Value("${kafka.thing.topic}")
+    private String topic;
+
+    @Value("${kafka.thing.group-id}")
+    private String shareGroupId;
+
+    @PostConstruct
+    public void configureShareGroupDLQ() throws ExecutionException, InterruptedException, TimeoutException {
+        KafkaShareGroupsUtils.configureShareGroupDLQ(bootstrapServers, topic, shareGroupId)
+                .get(5, TimeUnit.SECONDS);
+    }
+
     @Bean
-    public ShareConsumerFactory<String, String> shareConsumerFactory(@Value("${kafka.bootstrap-servers}") String bootstrapServers) {
+    public ShareConsumerFactory<String, String> shareConsumerFactory() {
         Map<String, Object> props = Map.of(
                 ConsumerConfig.BOOTSTRAP_SERVERS_CONFIG, bootstrapServers,
                 ConsumerConfig.KEY_DESERIALIZER_CLASS_CONFIG, StringDeserializer.class,
