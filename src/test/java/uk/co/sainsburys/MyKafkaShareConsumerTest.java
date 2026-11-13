@@ -29,7 +29,8 @@ import static org.mockito.Mockito.doThrow;
 import static org.mockito.Mockito.times;
 import static org.mockito.Mockito.verify;
 import static uk.co.sainsburys.TestUtils.createDlqConsumer;
-import static uk.co.sainsburys.TestUtils.createKafkaTopic;
+import static uk.co.sainsburys.TestUtils.createShareGroupDlqTopic;
+import static uk.co.sainsburys.TestUtils.createTopic;
 import static uk.co.sainsburys.TestUtils.createProducer;
 import static uk.co.sainsburys.TestUtils.getLagForShareGroup;
 import static uk.co.sainsburys.TestUtils.waitForShareGroupAssignment;
@@ -60,8 +61,8 @@ class MyKafkaShareConsumerTest {
 
     @BeforeAll
     static void beforeAll() throws Exception {
-        createKafkaTopic(KAFKA.getBootstrapServers(), TOPIC, 4);
-        createKafkaTopic(KAFKA.getBootstrapServers(), DLQ_TOPIC, 1);
+        createTopic(KAFKA.getBootstrapServers(), TOPIC, 4);
+        createShareGroupDlqTopic(KAFKA.getBootstrapServers(), DLQ_TOPIC);
     }
 
     @BeforeEach
