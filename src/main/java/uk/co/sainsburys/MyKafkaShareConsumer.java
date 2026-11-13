@@ -13,9 +13,11 @@ import java.time.Duration;
 import java.util.List;
 import java.util.Map;
 import java.util.concurrent.CountDownLatch;
+import java.util.concurrent.ExecutionException;
 import java.util.concurrent.ExecutorService;
 import java.util.concurrent.Executors;
 import java.util.concurrent.TimeUnit;
+import java.util.concurrent.TimeoutException;
 import java.util.concurrent.atomic.AtomicBoolean;
 
 @Slf4j
@@ -26,7 +28,7 @@ public class MyKafkaShareConsumer implements AutoCloseable {
 
     private final Runnable consumerTask;
 
-    public MyKafkaShareConsumer(MessageProcessor messageProcessor, String bootstrapServers, String shareGroupId, String topic) {
+    public MyKafkaShareConsumer(MessageProcessor messageProcessor, String bootstrapServers, String shareGroupId, String topic) throws ExecutionException, InterruptedException, TimeoutException {
         Map<String, Object> consumerProperties = Map.of(
                 ConsumerConfig.SHARE_ACKNOWLEDGEMENT_MODE_CONFIG, "explicit",
                 ConsumerConfig.BOOTSTRAP_SERVERS_CONFIG, bootstrapServers,
@@ -36,6 +38,9 @@ public class MyKafkaShareConsumer implements AutoCloseable {
         );
 
         consumerTask = () -> consume(messageProcessor, topic, consumerProperties);
+
+        KafkaShareGroupsUtils.configureShareGroupDLQ(bootstrapServers, topic, shareGroupId)
+                .get(5, TimeUnit.SECONDS);
     }
 
     public void start() {

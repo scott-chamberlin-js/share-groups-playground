@@ -3,17 +3,35 @@ package uk.co.sainsburys;
 import lombok.AccessLevel;
 import lombok.NoArgsConstructor;
 import org.apache.kafka.clients.admin.Admin;
+import org.apache.kafka.clients.admin.AlterConfigOp;
+import org.apache.kafka.clients.admin.ConfigEntry;
+import org.apache.kafka.clients.admin.ListShareGroupOffsetsSpec;
+import org.apache.kafka.clients.admin.NewTopic;
 import org.apache.kafka.clients.admin.ShareGroupDescription;
 import org.apache.kafka.clients.admin.ShareMemberAssignment;
 import org.apache.kafka.clients.admin.ShareMemberDescription;
 import org.apache.kafka.clients.admin.TopicDescription;
+import org.apache.kafka.clients.consumer.Consumer;
 import org.apache.kafka.clients.consumer.ConsumerConfig;
+import org.apache.kafka.clients.consumer.GroupProtocol;
+import org.apache.kafka.clients.consumer.KafkaConsumer;
+import org.apache.kafka.clients.producer.KafkaProducer;
+import org.apache.kafka.clients.producer.Producer;
+import org.apache.kafka.clients.producer.ProducerConfig;
 import org.apache.kafka.common.GroupState;
 import org.apache.kafka.common.TopicPartition;
+import org.apache.kafka.common.config.ConfigResource;
+import org.apache.kafka.common.serialization.StringDeserializer;
+import org.apache.kafka.common.serialization.StringSerializer;
 
+import java.time.Duration;
 import java.util.Collection;
 import java.util.List;
 import java.util.Map;
+import java.util.Optional;
+import java.util.UUID;
+import java.util.concurrent.ExecutionException;
+import java.util.concurrent.TimeoutException;
 
 import static java.util.concurrent.TimeUnit.SECONDS;
 import static org.assertj.core.api.Assertions.assertThat;
@@ -89,4 +107,51 @@ public final class TestUtils {
         }
     }
 
+    public static Optional<Long> getLagForShareGroup(String bootstrapServers, String topic, String shareGroupId, int partition) throws ExecutionException, InterruptedException, TimeoutException {
+        try (Admin adminClient = Admin.create(Map.of(ConsumerConfig.BOOTSTRAP_SERVERS_CONFIG, bootstrapServers))) {
+            TopicPartition topicPartition = new TopicPartition(topic, partition);
+            return adminClient.listShareGroupOffsets(Map.of(shareGroupId, new ListShareGroupOffsetsSpec().topicPartitions(List.of(topicPartition))))
+                    .all()
+                    .get(5, SECONDS)
+                    .get(shareGroupId)
+                    .get(topicPartition)
+                    .lag();
+        }
+    }
+
+    public static Producer<String, String> createProducer(String bootstrapServers) {
+        Map<String, Object> props = Map.of(
+                ProducerConfig.BOOTSTRAP_SERVERS_CONFIG, bootstrapServers,
+                ProducerConfig.KEY_SERIALIZER_CLASS_CONFIG, StringSerializer.class,
+                ProducerConfig.VALUE_SERIALIZER_CLASS_CONFIG, StringSerializer.class,
+                ProducerConfig.ACKS_CONFIG, "all"
+        );
+
+        return new KafkaProducer<>(props);
+    }
+
+    public static Consumer<String, String> createDlqConsumer(String bootstrapServers, String dlqTopic) {
+        Map<String, Object> props = Map.of(
+                ConsumerConfig.BOOTSTRAP_SERVERS_CONFIG, bootstrapServers,
+                ConsumerConfig.KEY_DESERIALIZER_CLASS_CONFIG, StringDeserializer.class,
+                ConsumerConfig.VALUE_DESERIALIZER_CLASS_CONFIG, StringDeserializer.class,
+                ConsumerConfig.CLIENT_ID_CONFIG, "dlq-consumer",
+                ConsumerConfig.GROUP_ID_CONFIG, "dlq-consumer-%s".formatted(UUID.randomUUID()),
+                ConsumerConfig.AUTO_OFFSET_RESET_CONFIG, "latest",
+                ConsumerConfig.GROUP_PROTOCOL_CONFIG, GroupProtocol.CONSUMER.name().toLowerCase()
+        );
+
+        KafkaConsumer<String, String> kafkaConsumer = new KafkaConsumer<>(props);
+        kafkaConsumer.subscribe(List.of(dlqTopic));
+        kafkaConsumer.poll(Duration.ofMillis(500));
+        return kafkaConsumer;
+    }
+
+    public static void createKafkaTopic(String bootstrapServers, String topic, int partitions) throws InterruptedException, ExecutionException, TimeoutException {
+        try (Admin adminClient = Admin.create(Map.of(ConsumerConfig.BOOTSTRAP_SERVERS_CONFIG, bootstrapServers))) {
+            adminClient.createTopics(List.of(new NewTopic(topic, partitions, (short) 1)))
+                    .all()
+                    .get(5, SECONDS);
+        }
+    }
 }
