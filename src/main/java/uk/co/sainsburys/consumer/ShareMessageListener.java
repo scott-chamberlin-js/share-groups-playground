@@ -1,10 +1,12 @@
-package uk.co.sainsburys;
+package uk.co.sainsburys.consumer;
 
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
 import org.apache.kafka.clients.consumer.ConsumerRecord;
 import org.springframework.kafka.annotation.KafkaListener;
 import org.springframework.stereotype.Component;
+import uk.co.sainsburys.exception.RetryableException;
+import uk.co.sainsburys.service.MessageProcessor;
 
 import java.io.IOException;
 

@@ -1,4 +1,4 @@
-package uk.co.sainsburys;
+package uk.co.sainsburys.config;
 
 import jakarta.annotation.PostConstruct;
 import lombok.extern.slf4j.Slf4j;
@@ -13,6 +13,7 @@ import org.springframework.kafka.config.ShareKafkaListenerContainerFactory;
 import org.springframework.kafka.core.DefaultShareConsumerFactory;
 import org.springframework.kafka.core.ShareConsumerFactory;
 import org.springframework.kafka.listener.ShareConsumerRecordRecoverer;
+import uk.co.sainsburys.exception.RetryableException;
 
 import java.util.Map;
 import java.util.concurrent.ExecutionException;

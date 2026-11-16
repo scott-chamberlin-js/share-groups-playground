@@ -1,4 +1,4 @@
-package uk.co.sainsburys;
+package uk.co.sainsburys.config;
 
 import lombok.AccessLevel;
 import lombok.NoArgsConstructor;
