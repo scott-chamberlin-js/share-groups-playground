@@ -1,4 +1,4 @@
-package uk.co.sainsburys;
+package uk.co.sainsburys.consumer;
 
 import lombok.extern.slf4j.Slf4j;
 import org.apache.kafka.clients.consumer.AcknowledgeType;
@@ -8,6 +8,9 @@ import org.apache.kafka.clients.consumer.ConsumerRecords;
 import org.apache.kafka.clients.consumer.KafkaShareConsumer;
 import org.apache.kafka.clients.consumer.internals.ConsumerUtils;
 import org.apache.kafka.common.serialization.StringDeserializer;
+import uk.co.sainsburys.config.KafkaShareGroupsUtils;
+import uk.co.sainsburys.exception.RetryableException;
+import uk.co.sainsburys.service.MessageProcessor;
 
 import java.time.Duration;
 import java.util.List;
